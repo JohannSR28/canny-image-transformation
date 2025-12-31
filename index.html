@@ -11,25 +11,46 @@
 
   <body class="min-h-screen bg-zinc-950 text-zinc-100">
     <div class="max-w-5xl mx-auto px-4 py-8">
-      <!-- Minimal top bar -->
+      <!-- Top bar -->
       <div class="flex items-center justify-between gap-4 mb-4">
         <h1 class="text-xl font-semibold">Canny Camera</h1>
+
         <div class="flex gap-2">
           <button id="startBtn"
             class="rounded-2xl bg-white text-zinc-950 font-semibold px-4 py-2 hover:bg-zinc-200 transition disabled:opacity-50 disabled:cursor-not-allowed">
             Start
           </button>
+
           <button id="stopBtn"
             class="rounded-2xl border border-zinc-800 px-4 py-2 hover:bg-zinc-900 transition disabled:opacity-50 disabled:cursor-not-allowed">
             Stop
           </button>
+
+          <button id="saveBtn"
+            class="rounded-2xl border border-zinc-800 px-4 py-2 hover:bg-zinc-900 transition disabled:opacity-50 disabled:cursor-not-allowed">
+            Enregistrer
+          </button>
         </div>
       </div>
 
-      <!-- Output -->
+      <!-- Two outputs: Original (top) + Canny (bottom) -->
       <div class="rounded-2xl border border-zinc-800 bg-zinc-900/40 p-3">
-        <div class="aspect-video rounded-2xl border border-zinc-800 bg-zinc-950/40 flex items-center justify-center overflow-hidden">
-          <canvas id="outCanvas" class="block"></canvas>
+        <div class="grid gap-3">
+          <!-- Original -->
+          <div class="rounded-2xl border border-zinc-800 bg-zinc-950/40 p-2">
+            <p class="text-xs text-zinc-400 mb-2">Original (miroir)</p>
+            <div class="aspect-video rounded-2xl border border-zinc-800 bg-zinc-950/40 flex items-center justify-center overflow-hidden">
+              <canvas id="origCanvas" class="block"></canvas>
+            </div>
+          </div>
+
+          <!-- Canny -->
+          <div class="rounded-2xl border border-zinc-800 bg-zinc-950/40 p-2">
+            <p class="text-xs text-zinc-400 mb-2">Canny (traits)</p>
+            <div class="aspect-video rounded-2xl border border-zinc-800 bg-zinc-950/40 flex items-center justify-center overflow-hidden">
+              <canvas id="cannyCanvas" class="block"></canvas>
+            </div>
+          </div>
         </div>
 
         <!-- Controls -->
@@ -54,74 +75,78 @@
         <div class="mt-3 flex items-center justify-between gap-3">
           <p id="status" class="text-sm text-zinc-400">Chargement OpenCV…</p>
 
-          <div class="flex items-center gap-2">
+          <div class="flex items-center gap-3">
             <label class="text-sm text-zinc-300 flex items-center gap-2 cursor-pointer select-none">
-              <input id="invert" type="checkbox" class="scale-110" />
-              Inverser (traits noirs sur fond blanc)
+              <input id="invert" type="checkbox" class="scale-110" checked />
+              Inverser (fond blanc)
             </label>
 
             <label class="text-sm text-zinc-300 flex items-center gap-2 cursor-pointer select-none">
               <input id="hq" type="checkbox" class="scale-110" />
-              HQ (plus lourd)
+              HQ
             </label>
           </div>
         </div>
       </div>
 
-      <!-- Hidden video + input canvas -->
+      <!-- Hidden video + processing canvases -->
       <video id="video" class="hidden" playsinline></video>
       <canvas id="inCanvas" class="hidden"></canvas>
+      <canvas id="mirrorCanvas" class="hidden"></canvas>
     </div>
 
     <script>
-      // Elements
+      // Buttons / status
       const startBtn = document.getElementById("startBtn");
       const stopBtn = document.getElementById("stopBtn");
+      const saveBtn = document.getElementById("saveBtn");
       const statusEl = document.getElementById("status");
 
+      // Controls
       const low = document.getElementById("low");
       const high = document.getElementById("high");
       const blur = document.getElementById("blur");
       const lowVal = document.getElementById("lowVal");
       const highVal = document.getElementById("highVal");
       const blurVal = document.getElementById("blurVal");
-
       const invert = document.getElementById("invert");
       const hq = document.getElementById("hq");
 
+      // Video + canvases
       const video = document.getElementById("video");
-      const inCanvas = document.getElementById("inCanvas");
-      const outCanvas = document.getElementById("outCanvas");
+      const inCanvas = document.getElementById("inCanvas");        // raw frame
+      const mirrorCanvas = document.getElementById("mirrorCanvas");// mirrored frame (for display + processing)
+      const origCanvas = document.getElementById("origCanvas");    // output original
+      const cannyCanvas = document.getElementById("cannyCanvas");  // output canny
 
       // State
       let cvReady = false;
       let stream = null;
       let running = false;
 
-      // Update labels
+      // UI labels
       low.addEventListener("input", () => (lowVal.textContent = low.value));
       high.addEventListener("input", () => (highVal.textContent = high.value));
       blur.addEventListener("input", () => (blurVal.textContent = blur.value));
 
-      // OpenCV ready polling
+      // OpenCV ready
       function waitForCV() {
         if (typeof cv !== "undefined" && cv.Mat) {
           cvReady = true;
           statusEl.textContent = "Prêt ✅";
           startBtn.disabled = false;
           stopBtn.disabled = true;
+          saveBtn.disabled = true;
           return;
         }
         setTimeout(waitForCV, 100);
       }
-
       startBtn.disabled = true;
       stopBtn.disabled = true;
+      saveBtn.disabled = true;
       waitForCV();
 
-      // Helpers
       function pickConstraints() {
-        // "HQ" = plus grand (plus lourd), sinon plus léger (plus fluide)
         if (hq.checked) {
           return { video: { facingMode: "user", width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false };
         }
@@ -137,22 +162,22 @@
         try {
           stream = await navigator.mediaDevices.getUserMedia(pickConstraints());
           video.srcObject = stream;
-
           await video.play();
 
-          // Set canvas sizes to match video
           const vw = video.videoWidth || 640;
           const vh = video.videoHeight || 360;
 
-          inCanvas.width = vw;
-          inCanvas.height = vh;
+          // Set canvas sizes
+          inCanvas.width = vw; inCanvas.height = vh;
+          mirrorCanvas.width = vw; mirrorCanvas.height = vh;
 
-          outCanvas.width = vw;
-          outCanvas.height = vh;
+          origCanvas.width = vw; origCanvas.height = vh;
+          cannyCanvas.width = vw; cannyCanvas.height = vh;
 
           running = true;
           startBtn.disabled = true;
           stopBtn.disabled = false;
+          saveBtn.disabled = false;
           statusEl.textContent = "Live ✅";
 
           renderLoop();
@@ -161,6 +186,7 @@
           running = false;
           startBtn.disabled = false;
           stopBtn.disabled = true;
+          saveBtn.disabled = true;
         }
       }
 
@@ -168,25 +194,45 @@
         running = false;
         startBtn.disabled = false;
         stopBtn.disabled = true;
+        saveBtn.disabled = true;
 
         if (stream) {
           stream.getTracks().forEach((t) => t.stop());
           stream = null;
         }
 
-        // Clear output canvas
-        const ctx = outCanvas.getContext("2d");
-        ctx.clearRect(0, 0, outCanvas.width, outCanvas.height);
+        // Clear outputs
+        origCanvas.getContext("2d").clearRect(0, 0, origCanvas.width, origCanvas.height);
+        cannyCanvas.getContext("2d").clearRect(0, 0, cannyCanvas.width, cannyCanvas.height);
 
         statusEl.textContent = cvReady ? "Prêt ✅" : "Chargement OpenCV…";
       }
 
-      // Main loop
+      // Mirror a frame: draw video to inCanvas then mirrored to mirrorCanvas
+      function drawMirroredFrame() {
+        // raw
+        const inCtx = inCanvas.getContext("2d", { willReadFrequently: true });
+        inCtx.drawImage(video, 0, 0, inCanvas.width, inCanvas.height);
+
+        // mirror
+        const mCtx = mirrorCanvas.getContext("2d", { willReadFrequently: true });
+        mCtx.save();
+        mCtx.clearRect(0, 0, mirrorCanvas.width, mirrorCanvas.height);
+        mCtx.translate(mirrorCanvas.width, 0);
+        mCtx.scale(-1, 1);
+        mCtx.drawImage(inCanvas, 0, 0);
+        mCtx.restore();
+      }
+
+      // Main loop: show mirrored original + canny computed from mirrored
       function renderLoop() {
         if (!running) return;
 
-        const ctx = inCanvas.getContext("2d", { willReadFrequently: true });
-        ctx.drawImage(video, 0, 0, inCanvas.width, inCanvas.height);
+        // Get frame and mirror it
+        drawMirroredFrame();
+
+        // Display mirrored original (top)
+        origCanvas.getContext("2d").drawImage(mirrorCanvas, 0, 0);
 
         // thresholds safety
         const lowT = Math.min(parseInt(low.value, 10), parseInt(high.value, 10));
@@ -194,8 +240,8 @@
         const k = parseInt(blur.value, 10);
 
         try {
-          // Read frame into OpenCV
-          const src = cv.imread(inCanvas); // RGBA
+          // Process mirrored frame with OpenCV
+          const src = cv.imread(mirrorCanvas); // RGBA
           const gray = new cv.Mat();
           cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
 
@@ -209,22 +255,16 @@
             cv.bitwise_not(edges, edges);
           }
 
-          // Show
-          cv.imshow(outCanvas, edges);
+          cv.imshow(cannyCanvas, edges);
 
-          // Cleanup
-          src.delete();
-          gray.delete();
-          blurred.delete();
-          edges.delete();
+          src.delete(); gray.delete(); blurred.delete(); edges.delete();
         } catch (e) {
-          // If something happens, stop loop gracefully
           statusEl.textContent = "Erreur traitement";
           stopCamera();
           return;
         }
 
-        // Aim ~30fps if not HQ (simple throttle)
+        // ~30fps if not HQ
         if (!hq.checked) {
           setTimeout(() => requestAnimationFrame(renderLoop), 33);
         } else {
@@ -232,11 +272,48 @@
         }
       }
 
-      // UI events
+      // Save: one PNG that contains both images (original + canny)
+      function saveBoth() {
+        if (!running) return;
+
+        const w = origCanvas.width;
+        const h = origCanvas.height;
+
+        const out = document.createElement("canvas");
+        out.width = w;
+        out.height = h * 2;
+
+        const ctx = out.getContext("2d");
+
+        // Background (optional)
+        ctx.fillStyle = "#000";
+        ctx.fillRect(0, 0, out.width, out.height);
+
+        // Draw original on top, canny on bottom
+        ctx.drawImage(origCanvas, 0, 0, w, h);
+        ctx.drawImage(cannyCanvas, 0, h, w, h);
+
+        // Small labels (optional but tiny)
+        ctx.fillStyle = "rgba(255,255,255,0.8)";
+        ctx.font = "20px sans-serif";
+        ctx.fillText("Original (miroir)", 16, 30);
+        ctx.fillText("Canny", 16, h + 30);
+
+        const url = out.toDataURL("image/png");
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `canny_capture_${Date.now()}.png`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+      }
+
+      // Events
       startBtn.addEventListener("click", startCamera);
       stopBtn.addEventListener("click", stopCamera);
+      saveBtn.addEventListener("click", saveBoth);
 
-      // If user toggles HQ while running, restart for new constraints
+      // Toggle HQ while running => restart to apply constraints
       hq.addEventListener("change", async () => {
         if (!running) return;
         stopCamera();
